@@ -60,6 +60,12 @@ export function groupItems(items) {
     if (!groups.has(key)) groups.set(key, { period, category: item.category, size: item.size, items: [] });
     groups.get(key).items.push(item);
   }
-  for (const g of groups.values()) g.items.sort((a, b) => a.id - b.id);
+  for (const g of groups.values()) g.items = sortItems(g.items, 'id');
   return [...groups.values()].sort(compareGroups);
 }
+
+const price = (item) => Number(item.price.replace(/[^\d.]/g, ''));
+
+// key: 'id' | 'price' (lowest first; id breaks ties). Returns a new array.
+export const sortItems = (items, key) =>
+  [...items].sort((a, b) => (key === 'price' ? price(a) - price(b) : 0) || a.id - b.id);

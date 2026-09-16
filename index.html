@@ -10,12 +10,17 @@
   #drop { border: 2px dashed #888; padding: 16px; border-radius: 8px; }
   #drop.over { background: #eef; }
   #status.warn { color: #b00; font-weight: bold; }
-  table { border-collapse: collapse; width: 100%; margin-bottom: 1in; break-inside: avoid; }
-  caption { text-align: left; font-weight: bold; font-size: 16px; padding-bottom: 4px; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 1in; break-inside: avoid; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  caption { text-align: left; font-weight: bold; font-size: 16px; padding-bottom: 4px; cursor: grab; }
   th, td { border: 1px solid #999; padding: 4px 6px; text-align: left; vertical-align: top; }
-  th { background: #eee; }
+  th { background: #ddd; }
+  tbody tr:nth-child(even) td { background: #f2f2f2; }
+  tbody tr { cursor: grab; }
+  caption::before, tbody td:first-child::before { content: '⠿ '; color: #aaa; }
+  .dragging { opacity: 0.4; }
   @media print {
     #controls { display: none; }
+    caption::before, tbody td:first-child::before { content: none; }
     body { margin: 0; }
     thead { display: table-header-group; }
     tr { break-inside: avoid; }
@@ -25,13 +30,15 @@
 <body>
 <div id="controls">
   <label id="drop">Drop a Consignor Inventory Report PDF here, or <input type="file" id="file" accept="application/pdf"></label>
+  <label>Period (.) items belong to: <input id="periodLabel" placeholder="e.g. Grandma"></label>
+  <label>Sort rows by: <select id="rowSort"><option value="id">Item ID</option><option value="price">Price</option></select></label>
   <button id="print" disabled>Print</button>
   <span id="status" role="status"></span>
 </div>
 <main id="tables"></main>
 <script type="module">
   import * as pdfjs from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.min.mjs';
-  import { parseItems, groupItems } from './lib.mjs';
+  import { parseItems, groupItems, sortItems } from './lib.mjs';
   pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.worker.min.mjs';
 
   const $ = (id) => document.getElementById(id);
@@ -42,21 +49,64 @@
   function render(groups) {
     $('tables').replaceChildren(...groups.map((g) => {
       const table = el('table');
-      table.append(el('caption', `${g.category} — ${g.size}${g.period ? ' (period items)' : ''}`));
+      table.group = g;
+      const caption = el('caption');
+      caption.draggable = true;
+      table.append(caption);
       const head = el('tr');
       head.append(...COLUMNS.map(([, label]) => el('th', label)));
-      table.append(el('thead'));
-      table.tHead.append(head);
-      const body = el('tbody');
+      table.createTHead().append(head);
+      const body = table.createTBody();
       for (const item of g.items) {
         const tr = el('tr');
+        tr.item = item;
+        tr.draggable = true;
         tr.append(...COLUMNS.map(([key]) => el('td', item[key])));
         body.append(tr);
       }
-      table.append(body);
       return table;
     }));
+    updateCaptions();
+    sortRows();
   }
+
+  function updateCaptions() {
+    const label = $('periodLabel').value.trim();
+    for (const table of $('tables').children) {
+      const { category, size, period } = table.group;
+      table.caption.textContent = `${category} — ${size}${period ? (label ? ` — ${label}` : ' (period items)') : ''}`;
+    }
+  }
+
+  // Re-sorting discards manual row order; table order is left alone.
+  function sortRows() {
+    for (const body of $('tables').querySelectorAll('tbody')) {
+      const byItem = new Map([...body.rows].map((tr) => [tr.item, tr]));
+      body.append(...sortItems([...byItem.keys()], $('rowSort').value).map((item) => byItem.get(item)));
+    }
+  }
+
+  // Drag a table by its caption among tables, or a row within its own table.
+  let dragged = null;
+  const tables = $('tables');
+  tables.addEventListener('dragstart', (e) => {
+    dragged = e.target.tagName === 'CAPTION' ? e.target.parentNode : e.target.closest('tbody tr');
+    if (!dragged) return;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', '');
+    dragged.classList.add('dragging');
+  });
+  tables.addEventListener('dragover', (e) => {
+    if (!dragged) return;
+    const target = e.target.closest(dragged.tagName === 'TABLE' ? 'table' : 'tbody tr');
+    if (!target || target.parentNode !== dragged.parentNode) return;
+    e.preventDefault();
+    if (target === dragged) return;
+    const { top, height } = target.getBoundingClientRect();
+    target.parentNode.insertBefore(dragged, e.clientY > top + height / 2 ? target.nextSibling : target);
+  });
+  tables.addEventListener('drop', (e) => e.preventDefault());
+  tables.addEventListener('dragend', () => { dragged?.classList.remove('dragging'); dragged = null; });
 
   async function load(file) {
     const status = $('status');
@@ -88,6 +138,8 @@
 
   $('file').addEventListener('change', (e) => e.target.files[0] && load(e.target.files[0]));
   $('print').addEventListener('click', () => window.print());
+  $('periodLabel').addEventListener('input', updateCaptions);
+  $('rowSort').addEventListener('change', sortRows);
   const drop = $('drop');
   drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
   drop.addEventListener('dragleave', () => drop.classList.remove('over'));

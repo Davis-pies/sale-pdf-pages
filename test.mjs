@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseItems, groupItems, SIZE_ORDER } from './lib.mjs';
+import { parseItems, groupItems, sortItems, SIZE_ORDER } from './lib.mjs';
 
 // Synthetic report text laid out like a real Consignor Inventory Report: every cell is
 // centered on its column, and wrapped lines sit 11.2pt apart around the row's center.
@@ -98,4 +98,13 @@ test('sizes follow SIZE_ORDER, unknown sizes last A–Z', () => {
     item(4, 'a', 'Toys', SIZE_ORDER[0]),
   ]).map((g) => g.size);
   assert.deepEqual(sizes, [SIZE_ORDER[0], SIZE_ORDER[1], 'Alpha', 'Zeta']);
+});
+
+test('sortItems by id or numeric price, id breaks price ties', () => {
+  const items = [
+    { id: 3, price: '$10.00' }, { id: 1, price: '$2.50' }, { id: 4, price: '$2.50' }, { id: 2, price: '$9.00' },
+  ];
+  assert.deepEqual(sortItems(items, 'id').map((i) => i.id), [1, 2, 3, 4]);
+  assert.deepEqual(sortItems(items, 'price').map((i) => i.id), [1, 4, 2, 3]);
+  assert.deepEqual(items.map((i) => i.id), [3, 1, 4, 2]); // input untouched
 });
