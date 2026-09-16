@@ -54,6 +54,8 @@
   <label><input type="checkbox" id="keepTogether" checked> Keep tables together</label>
   <label>Font size (pt): <input type="number" id="fontSize" value="10" min="6" max="24" step="1"></label>
   <button id="resetOrder">Reset table order</button>
+  <button id="resetGaps">Reset gaps</button>
+  <button id="resetAll">Reset all</button>
   <button id="print" disabled>Print</button>
   <span id="status" role="status"></span><span id="pageCount"></span>
 </div>
@@ -286,6 +288,8 @@
     paginate();
   });
   $('resetOrder').addEventListener('click', () => { blocks.sort((a, b) => compareGroups(a.group, b.group)); paginate(); });
+  $('resetGaps').addEventListener('click', () => { for (const block of blocks) block.gap = 1; paginate(); });
+  $('resetAll').addEventListener('click', rebuild); // table order, row order (current sort) and gaps
   sortRows(); // label the sort buttons
   const drop = $('drop');
   drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
