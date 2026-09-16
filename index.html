@@ -10,8 +10,8 @@
   #drop { border: 2px dashed #888; padding: 16px; border-radius: 8px; }
   #drop.over { background: #eef; }
   #status.warn { color: #b00; font-weight: bold; }
-  table { border-collapse: collapse; width: 100%; margin-bottom: 1in; break-inside: avoid; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
-  caption { text-align: left; font-weight: bold; font-size: 16px; padding-bottom: 4px; cursor: grab; }
+  table { font-size: var(--table-font, 10pt); border-collapse: collapse; width: 100%; margin-bottom: 1in; break-inside: avoid; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  caption { text-align: left; font-weight: bold; font-size: calc(var(--table-font, 10pt) + 2pt); padding-bottom: 4px; cursor: grab; }
   th, td { border: 1px solid #999; padding: 4px 6px; text-align: left; vertical-align: top; }
   th { background: #ddd; }
   tbody tr:nth-child(even) td { background: #f2f2f2; }
@@ -31,14 +31,18 @@
 <div id="controls">
   <label id="drop">Drop a Consignor Inventory Report PDF here, or <input type="file" id="file" accept="application/pdf"></label>
   <label>Period (.) items belong to: <input id="periodLabel" placeholder="e.g. Grandma"></label>
-  <label>Sort rows by: <select id="rowSort"><option value="id">Item ID</option><option value="price">Price</option></select></label>
+  <span>Sort rows: <button class="sort" data-key="id">Item ID</button> <button class="sort" data-key="price">Price</button></span>
+  <label><input type="checkbox" id="splitDiscount"> Split by Discount</label>
+  <label><input type="checkbox" id="splitDonate"> Split by Donate</label>
+  <label>Font size (pt): <input type="number" id="fontSize" value="10" min="6" max="24" step="1"></label>
+  <button id="resetOrder">Reset table order</button>
   <button id="print" disabled>Print</button>
   <span id="status" role="status"></span>
 </div>
 <main id="tables"></main>
 <script type="module">
   import * as pdfjs from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.min.mjs';
-  import { parseItems, groupItems, sortItems } from './lib.mjs';
+  import { parseItems, groupItems, sortItems, compareGroups } from './lib.mjs';
   pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.worker.min.mjs';
 
   const $ = (id) => document.getElementById(id);
@@ -73,18 +77,27 @@
   function updateCaptions() {
     const label = $('periodLabel').value.trim();
     for (const table of $('tables').children) {
-      const { category, size, period } = table.group;
-      table.caption.textContent = `${category} — ${size}${period ? (label ? ` — ${label}` : ' (period items)') : ''}`;
+      const { category, size, flags, period } = table.group;
+      table.caption.textContent = [category, size, ...flags].join(' — ') + (period ? (label ? ` — ${label}` : ' (period items)') : '');
     }
   }
 
-  // Re-sorting discards manual row order; table order is left alone.
+  // Re-sorting overrides manual row order; table order is left alone.
+  const sort = { key: 'id', dir: 'asc' };
   function sortRows() {
+    for (const button of document.querySelectorAll('button.sort')) {
+      const active = button.dataset.key === sort.key;
+      button.textContent = button.textContent.replace(/ [▲▼]$/, '') + (active ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : '');
+      button.setAttribute('aria-pressed', active);
+    }
     for (const body of $('tables').querySelectorAll('tbody')) {
       const byItem = new Map([...body.rows].map((tr) => [tr.item, tr]));
-      body.append(...sortItems([...byItem.keys()], $('rowSort').value).map((item) => byItem.get(item)));
+      body.append(...sortItems([...byItem.keys()], sort.key, sort.dir).map((item) => byItem.get(item)));
     }
   }
+
+  let items = [];
+  const rebuild = () => render(groupItems(items, { discount: $('splitDiscount').checked, donate: $('splitDonate').checked }));
 
   // Drag a table by its caption among tables, or a row within its own table.
   let dragged = null;
@@ -114,18 +127,20 @@
     status.textContent = `Reading ${file.name}…`;
     $('print').disabled = true;
     $('tables').replaceChildren();
+    items = [];
     try {
       const doc = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
       const textItems = [];
       for (let p = 1; p <= doc.numPages; p++) {
-        const { items } = await (await doc.getPage(p)).getTextContent();
-        for (const t of items) if (t.str.trim()) textItems.push({ page: p, str: t.str, x: t.transform[4], y: t.transform[5], w: t.width });
+        const page = await (await doc.getPage(p)).getTextContent();
+        for (const t of page.items) if (t.str.trim()) textItems.push({ page: p, str: t.str, x: t.transform[4], y: t.transform[5], w: t.width });
       }
-      const { items, expectedTotal } = parseItems(textItems);
-      const groups = groupItems(items);
-      render(groups);
+      const parsed = parseItems(textItems);
+      items = parsed.items;
+      const { expectedTotal } = parsed;
+      rebuild();
       $('print').disabled = items.length === 0;
-      status.textContent = `${items.length} items in ${groups.length} tables.`;
+      status.textContent = `${items.length} items in ${$('tables').children.length} tables.`;
       if (items.length === 0 || items.length !== expectedTotal) {
         status.className = 'warn';
         status.textContent = `Warning: parsed ${items.length} items but the report says Total Items: ${expectedTotal ?? 'not found'}. Check before printing.`;
@@ -139,7 +154,18 @@
   $('file').addEventListener('change', (e) => e.target.files[0] && load(e.target.files[0]));
   $('print').addEventListener('click', () => window.print());
   $('periodLabel').addEventListener('input', updateCaptions);
-  $('rowSort').addEventListener('change', sortRows);
+  for (const button of document.querySelectorAll('button.sort')) {
+    button.addEventListener('click', () => {
+      sort.dir = sort.key === button.dataset.key && sort.dir === 'asc' ? 'desc' : 'asc';
+      sort.key = button.dataset.key;
+      sortRows();
+    });
+  }
+  $('splitDiscount').addEventListener('change', rebuild);
+  $('splitDonate').addEventListener('change', rebuild);
+  $('fontSize').addEventListener('input', (e) => document.documentElement.style.setProperty('--table-font', `${e.target.value}pt`));
+  $('resetOrder').addEventListener('click', () => $('tables').append(...[...$('tables').children].sort((a, b) => compareGroups(a.group, b.group))));
+  sortRows(); // label the sort buttons
   const drop = $('drop');
   drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
   drop.addEventListener('dragleave', () => drop.classList.remove('over'));

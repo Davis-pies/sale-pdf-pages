@@ -50,14 +50,19 @@ export const SIZE_ORDER = ['Infant (0-12 mo)', 'Toddler (1 -2 yr)', '3T/3'];
 const sizeRank = (s) => { const i = SIZE_ORDER.indexOf(s); return i < 0 ? SIZE_ORDER.length : i; };
 
 export const compareGroups = (a, b) =>
-  a.period - b.period || a.category.localeCompare(b.category) || sizeRank(a.size) - sizeRank(b.size) || a.size.localeCompare(b.size);
+  a.period - b.period || a.category.localeCompare(b.category) || sizeRank(a.size) - sizeRank(b.size) ||
+  a.size.localeCompare(b.size) || a.flags.join(', ').localeCompare(b.flags.join(', '));
 
-export function groupItems(items) {
+// The Flags cell reads like "Discount, No Donate"; pick the part ending in `word`.
+const flag = (item, word) => item.flags.split(', ').find((f) => f.endsWith(word)) ?? '';
+
+export function groupItems(items, { discount = false, donate = false } = {}) {
   const groups = new Map();
   for (const item of items) {
     const period = item.description.trim().endsWith('.');
-    const key = JSON.stringify([period, item.category, item.size]);
-    if (!groups.has(key)) groups.set(key, { period, category: item.category, size: item.size, items: [] });
+    const flags = [discount && flag(item, 'Discount'), donate && flag(item, 'Donate')].filter((f) => f !== false);
+    const key = JSON.stringify([period, item.category, item.size, flags]);
+    if (!groups.has(key)) groups.set(key, { period, category: item.category, size: item.size, flags, items: [] });
     groups.get(key).items.push(item);
   }
   for (const g of groups.values()) g.items = sortItems(g.items, 'id');
@@ -66,6 +71,6 @@ export function groupItems(items) {
 
 const price = (item) => Number(item.price.replace(/[^\d.]/g, ''));
 
-// key: 'id' | 'price' (lowest first; id breaks ties). Returns a new array.
-export const sortItems = (items, key) =>
-  [...items].sort((a, b) => (key === 'price' ? price(a) - price(b) : 0) || a.id - b.id);
+// key: 'id' | 'price'; dir: 'asc' | 'desc'; id breaks ties in the same direction. Returns a new array.
+export const sortItems = (items, key, dir = 'asc') =>
+  [...items].sort((a, b) => ((key === 'price' ? price(a) - price(b) : 0) || a.id - b.id) * (dir === 'desc' ? -1 : 1));

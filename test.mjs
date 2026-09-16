@@ -108,3 +108,23 @@ test('sortItems by id or numeric price, id breaks price ties', () => {
   assert.deepEqual(sortItems(items, 'price').map((i) => i.id), [1, 4, 2, 3]);
   assert.deepEqual(items.map((i) => i.id), [3, 1, 4, 2]); // input untouched
 });
+
+test('sortItems descending reverses both key and id tie-break', () => {
+  const items = [
+    { id: 3, price: '$10.00' }, { id: 1, price: '$2.50' }, { id: 4, price: '$2.50' }, { id: 2, price: '$9.00' },
+  ];
+  assert.deepEqual(sortItems(items, 'id', 'desc').map((i) => i.id), [4, 3, 2, 1]);
+  assert.deepEqual(sortItems(items, 'price', 'desc').map((i) => i.id), [3, 2, 4, 1]);
+});
+
+test('groupItems optionally splits on Discount and Donate flags', () => {
+  const f = (id, flags) => ({ id, description: 'x', category: 'Toys', size: 'Leave Blank', price: '$1.00', flags });
+  const items = [f(1, 'No Discount, Donate'), f(2, 'Discount, No Donate'), f(3, 'Discount, Donate'), f(4, 'No Discount, No Donate')];
+  const summary = (groups) => groups.map((g) => [g.flags, g.items.map((i) => i.id)]);
+  assert.deepEqual(summary(groupItems(items)), [[[], [1, 2, 3, 4]]]);
+  assert.deepEqual(summary(groupItems(items, { discount: true })), [[['Discount'], [2, 3]], [['No Discount'], [1, 4]]]);
+  assert.deepEqual(summary(groupItems(items, { donate: true })), [[['Donate'], [1, 3]], [['No Donate'], [2, 4]]]);
+  assert.deepEqual(summary(groupItems(items, { discount: true, donate: true })), [
+    [['Discount', 'Donate'], [3]], [['Discount', 'No Donate'], [2]], [['No Discount', 'Donate'], [1]], [['No Discount', 'No Donate'], [4]],
+  ]);
+});
