@@ -5,23 +5,32 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Consignor Tables</title>
 <style>
-  body { font: 14px system-ui, sans-serif; margin: 16px; color: #111; background: #fff; }
+  @page { size: letter; margin: 0.5in; }
+  body { font: 14px system-ui, sans-serif; margin: 16px; color: #111; background: #999; }
+  /* On screen the tables sit on a letter-width sheet with the same 0.5in margins as print. */
+  #tables { box-sizing: border-box; width: 8.5in; min-height: 11in; padding: 0.5in; margin: 0 auto; background: #fff; box-shadow: 0 2px 8px #0006; }
+  #controls { background: #fff; padding: 8px; border-radius: 8px; }
   #controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
   #drop { border: 2px dashed #888; padding: 16px; border-radius: 8px; }
   #drop.over { background: #eef; }
   #status.warn { color: #b00; font-weight: bold; }
-  table { font-size: var(--table-font, 10pt); border-collapse: collapse; width: 100%; margin-bottom: 1in; break-inside: avoid; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  table { font-size: var(--table-font, 10pt); border-collapse: collapse; width: 100%; break-inside: avoid; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   caption { text-align: left; font-weight: bold; font-size: calc(var(--table-font, 10pt) + 2pt); padding-bottom: 4px; cursor: grab; }
   th, td { border: 1px solid #999; padding: 4px 6px; text-align: left; vertical-align: top; }
   th { background: #ddd; }
   tbody tr:nth-child(even) td { background: #f2f2f2; }
   tbody tr { cursor: grab; }
-  caption::before, tbody td:first-child::before { content: '⠿ '; color: #aaa; }
+  caption::before, tbody td:first-child::before { content: '⠿'; color: #aaa; position: absolute; margin-left: -1.1em; } /* in the margin, so screen layout matches print */
   .dragging { opacity: 0.4; }
+  .gap { position: relative; height: 1in; }
+  .gap label { position: absolute; right: 0; top: 50%; transform: translateY(-50%); font-size: 12px; color: #555; }
+  .gap input { width: 4em; }
   @media print {
     #controls { display: none; }
     caption::before, tbody td:first-child::before { content: none; }
-    body { margin: 0; }
+    body { margin: 0; background: #fff; }
+    #tables { width: auto; min-height: 0; padding: 0; box-shadow: none; }
+    .gap label { display: none; }
     thead { display: table-header-group; }
     tr { break-inside: avoid; }
   }
@@ -68,7 +77,18 @@
         tr.append(...COLUMNS.map(([key]) => el('td', item[key])));
         body.append(tr);
       }
-      return table;
+      const section = el('section');
+      section.group = g;
+      const gap = el('div');
+      gap.className = 'gap';
+      const label = el('label', 'Space below (in): ');
+      const input = el('input');
+      Object.assign(input, { type: 'number', min: 0, step: 0.25, value: 1 });
+      input.addEventListener('input', () => { gap.style.height = `${Math.max(0, input.value)}in`; });
+      label.append(input);
+      gap.append(label);
+      section.append(table, gap);
+      return section;
     }));
     updateCaptions();
     sortRows();
@@ -76,7 +96,7 @@
 
   function updateCaptions() {
     const label = $('periodLabel').value.trim();
-    for (const table of $('tables').children) {
+    for (const table of $('tables').querySelectorAll('table')) {
       const { category, size, flags, period } = table.group;
       table.caption.textContent = [category, size, ...flags].join(' — ') + (period ? (label ? ` — ${label}` : ' (period items)') : '');
     }
@@ -99,11 +119,11 @@
   let items = [];
   const rebuild = () => render(groupItems(items, { discount: $('splitDiscount').checked, donate: $('splitDonate').checked }));
 
-  // Drag a table by its caption among tables, or a row within its own table.
+  // Drag a table (with its gap) by its caption among tables, or a row within its own table.
   let dragged = null;
   const tables = $('tables');
   tables.addEventListener('dragstart', (e) => {
-    dragged = e.target.tagName === 'CAPTION' ? e.target.parentNode : e.target.closest('tbody tr');
+    dragged = e.target.tagName === 'CAPTION' ? e.target.closest('section') : e.target.closest('tbody tr');
     if (!dragged) return;
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', '');
@@ -111,7 +131,7 @@
   });
   tables.addEventListener('dragover', (e) => {
     if (!dragged) return;
-    const target = e.target.closest(dragged.tagName === 'TABLE' ? 'table' : 'tbody tr');
+    const target = e.target.closest(dragged.tagName === 'SECTION' ? 'section' : 'tbody tr');
     if (!target || target.parentNode !== dragged.parentNode) return;
     e.preventDefault();
     if (target === dragged) return;
