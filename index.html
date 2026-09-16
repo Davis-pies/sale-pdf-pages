@@ -33,7 +33,7 @@
   .gap::before { content: ''; position: absolute; left: 0; right: 0; top: -5px; bottom: -5px; } /* grab area, even at 0in */
   .gap::after { content: ''; position: absolute; left: 0; right: 0; top: 50%; border-top: 2px dashed transparent; }
   .gap:hover::after, .gap.resizing::after { border-color: #06f; }
-  .gap span { display: none; position: absolute; right: 0; top: 50%; transform: translateY(-50%); background: #fff; color: #06f; font-size: 12px; padding: 0 4px; }
+  .gap span { display: none; position: absolute; right: 0; bottom: calc(50% + 3px); color: #06f; font-size: 12px; line-height: 1; white-space: nowrap; } /* just above the line */
   .gap:hover span, .gap.resizing span { display: block; }
   @media print {
     body { margin: 0; background: #fff; }
