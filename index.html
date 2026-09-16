@@ -5,34 +5,42 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Consignor Tables</title>
 <style>
-  @page { size: letter; margin: 0.5in; }
+  /* Pages are laid out by script as letter sheets with 0.5in padding, so the printer adds no margin. */
+  @page { size: letter; margin: 0; }
   body { font: 14px system-ui, sans-serif; margin: 16px; color: #111; background: #999; }
-  /* On screen the tables sit on a letter-width sheet with the same 0.5in margins as print. */
-  #tables { box-sizing: border-box; width: 8.5in; min-height: 11in; padding: 0.5in; margin: 0 auto; background: #fff; box-shadow: 0 2px 8px #0006; }
-  #controls { background: #fff; padding: 8px; border-radius: 8px; }
-  #controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+  #controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; background: #fff; padding: 8px; border-radius: 8px; }
   #drop { border: 2px dashed #888; padding: 16px; border-radius: 8px; }
   #drop.over { background: #eef; }
   #status.warn { color: #b00; font-weight: bold; }
-  table { font-size: var(--table-font, 10pt); border-collapse: collapse; width: 100%; break-inside: avoid; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .page { box-sizing: border-box; width: 8.5in; height: 11in; padding: 0.5in; margin: 0 auto 0.25in; background: #fff; box-shadow: 0 2px 8px #0006; }
+  .content { height: 100%; overflow: hidden; }
+  table { font-size: var(--table-font, 10pt); border-collapse: collapse; width: 100%; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   caption { text-align: left; font-weight: bold; font-size: calc(var(--table-font, 10pt) + 2pt); padding-bottom: 4px; cursor: grab; }
   th, td { border: 1px solid #999; padding: 4px 6px; text-align: left; vertical-align: top; }
   th { background: #ddd; }
-  tbody tr:nth-child(even) td { background: #f2f2f2; }
+  tbody tr.alt td { background: #f2f2f2; }
   tbody tr { cursor: grab; }
-  caption::before, tbody td:first-child::before { content: '⠿'; color: #aaa; position: absolute; margin-left: -1.1em; } /* in the margin, so screen layout matches print */
+  /* Handles sit in the page margin so they don't change the table layout. */
+  caption::before, tbody td:first-child::before { content: '⠿'; color: #aaa; position: absolute; }
+  caption::before { margin-left: -1.2em; }
+  tbody td:first-child::before { margin-left: -2.2em; }
   .dragging { opacity: 0.4; }
-  .gap { position: relative; height: 1in; }
-  .gap label { position: absolute; right: 0; top: 50%; transform: translateY(-50%); font-size: 12px; color: #555; }
-  .gap input { width: 4em; }
+  table.drop-before { box-shadow: 0 -3px 0 #06f; }
+  table.drop-after { box-shadow: 0 3px 0 #06f; }
+  tr.drop-before td { box-shadow: inset 0 3px 0 #06f; }
+  tr.drop-after td { box-shadow: inset 0 -3px 0 #06f; }
+  .gap { position: relative; cursor: ns-resize; touch-action: none; }
+  .gap::before { content: ''; position: absolute; left: 0; right: 0; top: -5px; bottom: -5px; } /* grab area, even at 0in */
+  .gap::after { content: ''; position: absolute; left: 0; right: 0; top: 50%; border-top: 2px dashed transparent; }
+  .gap:hover::after, .gap.resizing::after { border-color: #06f; }
+  .gap span { display: none; position: absolute; right: 0; top: 50%; transform: translateY(-50%); background: #fff; color: #06f; font-size: 12px; padding: 0 4px; }
+  .gap:hover span, .gap.resizing span { display: block; }
   @media print {
-    #controls { display: none; }
-    caption::before, tbody td:first-child::before { content: none; }
     body { margin: 0; background: #fff; }
-    #tables { width: auto; min-height: 0; padding: 0; box-shadow: none; }
-    .gap label { display: none; }
-    thead { display: table-header-group; }
-    tr { break-inside: avoid; }
+    #controls { display: none; }
+    .page { margin: 0; box-shadow: none; break-after: page; }
+    .page:last-child { break-after: auto; }
+    caption::before, tbody td:first-child::before, .gap::after, .gap span { display: none; }
   }
 </style>
 </head>
@@ -43,12 +51,13 @@
   <span>Sort rows: <button class="sort" data-key="id">Item ID</button> <button class="sort" data-key="price">Price</button></span>
   <label><input type="checkbox" id="splitDiscount"> Split by Discount</label>
   <label><input type="checkbox" id="splitDonate"> Split by Donate</label>
+  <label><input type="checkbox" id="keepTogether" checked> Keep tables together</label>
   <label>Font size (pt): <input type="number" id="fontSize" value="10" min="6" max="24" step="1"></label>
   <button id="resetOrder">Reset table order</button>
   <button id="print" disabled>Print</button>
-  <span id="status" role="status"></span>
+  <span id="status" role="status"></span><span id="pageCount"></span>
 </div>
-<main id="tables"></main>
+<main id="pages"></main>
 <script type="module">
   import * as pdfjs from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.min.mjs';
   import { parseItems, groupItems, sortItems, compareGroups } from './lib.mjs';
@@ -56,98 +65,186 @@
 
   const $ = (id) => document.getElementById(id);
   const COLUMNS = [['id', 'Item ID'], ['description', 'Description'], ['category', 'Category'], ['size', 'Size'], ['price', 'Price'], ['flags', 'Flags']];
+  const PX_PER_IN = 96;
 
   function el(tag, text) { const e = document.createElement(tag); if (text != null) e.textContent = text; return e; }
 
-  function render(groups) {
-    $('tables').replaceChildren(...groups.map((g) => {
-      const table = el('table');
-      table.group = g;
-      const caption = el('caption');
-      caption.draggable = true;
-      table.append(caption);
-      const head = el('tr');
-      head.append(...COLUMNS.map(([, label]) => el('th', label)));
-      table.createTHead().append(head);
-      const body = table.createTBody();
-      for (const item of g.items) {
-        const tr = el('tr');
-        tr.item = item;
-        tr.draggable = true;
-        tr.append(...COLUMNS.map(([key]) => el('td', item[key])));
-        body.append(tr);
-      }
-      const section = el('section');
-      section.group = g;
-      const gap = el('div');
-      gap.className = 'gap';
-      const label = el('label', 'Space below (in): ');
-      const input = el('input');
-      Object.assign(input, { type: 'number', min: 0, step: 0.25, value: 1 });
-      input.addEventListener('input', () => { gap.style.height = `${Math.max(0, input.value)}in`; });
-      label.append(input);
-      gap.append(label);
-      section.append(table, gap);
-      return section;
-    }));
-    updateCaptions();
-    sortRows();
+  // The model: one block per table, in display order. Pages are always rebuilt from it.
+  let items = [];
+  let blocks = []; // { group, rows: item[], gap: inches }
+  const sort = { key: 'id', dir: 'asc' };
+
+  function title({ category, size, flags, period }) {
+    const label = $('periodLabel').value.trim();
+    return [category, size, ...flags].join(' — ') + (period ? (label ? ` — ${label}` : ' (period items)') : '');
   }
 
-  function updateCaptions() {
-    const label = $('periodLabel').value.trim();
-    for (const table of $('tables').querySelectorAll('table')) {
-      const { category, size, flags, period } = table.group;
-      table.caption.textContent = [category, size, ...flags].join(' — ') + (period ? (label ? ` — ${label}` : ' (period items)') : '');
+  function makeTable(block, start, cont) {
+    const table = el('table');
+    table.block = block;
+    const caption = el('caption', title(block.group) + (cont ? ' (cont.)' : ''));
+    caption.draggable = true;
+    table.append(caption);
+    const head = el('tr');
+    head.append(...COLUMNS.map(([, label]) => el('th', label)));
+    table.createTHead().append(head);
+    const body = table.createTBody();
+    block.rows.slice(start).forEach((item, i) => {
+      const tr = el('tr');
+      Object.assign(tr, { item, block, draggable: true });
+      if ((start + i) % 2) tr.className = 'alt';
+      tr.append(...COLUMNS.map(([key]) => el('td', item[key])));
+      body.append(tr);
+    });
+    return table;
+  }
+
+  function paginate() {
+    const pages = $('pages');
+    pages.replaceChildren();
+    let content;
+    const newPage = () => {
+      const page = el('div');
+      page.className = 'page';
+      content = el('div');
+      content.className = 'content';
+      page.append(content);
+      pages.append(page);
+    };
+    const overflows = () => content.scrollHeight > content.clientHeight + 1;
+    if (blocks.length) newPage();
+
+    for (const block of blocks) {
+      let start = 0;
+      let cont = false;
+      for (;;) {
+        const table = makeTable(block, start, cont);
+        content.append(table);
+        if (!overflows()) break;
+        const alone = content.firstChild === table;
+        // A whole table that would fit on a fresh page moves there instead of splitting.
+        const fitsOnFreshPage = table.getBoundingClientRect().height <= content.clientHeight;
+        if ($('keepTogether').checked && !cont && !alone && fitsOnFreshPage) { table.remove(); newPage(); continue; }
+        const rows = [...table.tBodies[0].rows];
+        let fit = rows.length;
+        while (fit > 0 && overflows()) rows[--fit].remove();
+        if (fit === 0) {
+          if (!alone) { table.remove(); newPage(); continue; }
+          table.tBodies[0].append(rows[0]); // one row taller than a page: keep it (clipped) rather than loop forever
+          fit = 1;
+        }
+        start += fit;
+        if (start >= block.rows.length) break;
+        cont = true;
+        newPage();
+      }
+      // The gap belongs to the table above it; past the page bottom it is simply cut off.
+      const gap = el('div');
+      gap.className = 'gap';
+      gap.block = block;
+      gap.style.height = `${block.gap}in`;
+      gap.append(el('span', `${block.gap} in`));
+      content.append(gap);
     }
+    $('pageCount').textContent = blocks.length ? ` ${pages.children.length} page(s).` : '';
+  }
+
+  function rebuild() {
+    const groups = groupItems(items, { discount: $('splitDiscount').checked, donate: $('splitDonate').checked });
+    blocks = groups.map((group) => ({ group, rows: sortItems(group.items, sort.key, sort.dir), gap: 1 }));
+    paginate();
   }
 
   // Re-sorting overrides manual row order; table order is left alone.
-  const sort = { key: 'id', dir: 'asc' };
   function sortRows() {
     for (const button of document.querySelectorAll('button.sort')) {
       const active = button.dataset.key === sort.key;
       button.textContent = button.textContent.replace(/ [▲▼]$/, '') + (active ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : '');
       button.setAttribute('aria-pressed', active);
     }
-    for (const body of $('tables').querySelectorAll('tbody')) {
-      const byItem = new Map([...body.rows].map((tr) => [tr.item, tr]));
-      body.append(...sortItems([...byItem.keys()], sort.key, sort.dir).map((item) => byItem.get(item)));
-    }
+    for (const block of blocks) block.rows = sortItems(block.rows, sort.key, sort.dir);
+    paginate();
   }
 
-  let items = [];
-  const rebuild = () => render(groupItems(items, { discount: $('splitDiscount').checked, donate: $('splitDonate').checked }));
+  const pages = $('pages');
 
-  // Drag a table (with its gap) by its caption among tables, or a row within its own table.
+  // Drag a table by its caption among tables, or a row within its own table (on any page).
   let dragged = null;
-  const tables = $('tables');
-  tables.addEventListener('dragstart', (e) => {
-    dragged = e.target.tagName === 'CAPTION' ? e.target.closest('section') : e.target.closest('tbody tr');
-    if (!dragged) return;
+  let dropAt = null;
+  const clearIndicator = () => {
+    for (const e of pages.querySelectorAll('.drop-before, .drop-after')) e.classList.remove('drop-before', 'drop-after');
+    dropAt = null;
+  };
+  pages.addEventListener('dragstart', (e) => {
+    const row = e.target.closest?.('tbody tr');
+    if (e.target.tagName === 'CAPTION') dragged = { block: e.target.parentNode.block };
+    else if (row) dragged = { block: row.block, item: row.item };
+    else return;
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', '');
-    dragged.classList.add('dragging');
+    e.target.classList.add('dragging');
   });
-  tables.addEventListener('dragover', (e) => {
+  pages.addEventListener('dragover', (e) => {
     if (!dragged) return;
-    const target = e.target.closest(dragged.tagName === 'SECTION' ? 'section' : 'tbody tr');
-    if (!target || target.parentNode !== dragged.parentNode) return;
+    const target = dragged.item ? e.target.closest('tbody tr') : e.target.closest('table');
+    clearIndicator();
+    if (!target || (dragged.item && target.block !== dragged.block)) return;
     e.preventDefault();
-    if (target === dragged) return;
     const { top, height } = target.getBoundingClientRect();
-    target.parentNode.insertBefore(dragged, e.clientY > top + height / 2 ? target.nextSibling : target);
+    const after = e.clientY > top + height / 2;
+    target.classList.add(after ? 'drop-after' : 'drop-before');
+    dropAt = { target, after };
   });
-  tables.addEventListener('drop', (e) => e.preventDefault());
-  tables.addEventListener('dragend', () => { dragged?.classList.remove('dragging'); dragged = null; });
+  pages.addEventListener('drop', (e) => {
+    e.preventDefault();
+    if (!dragged || !dropAt) return;
+    const { target, after } = dropAt;
+    const [list, moving, anchor] = dragged.item
+      ? [dragged.block.rows, dragged.item, target.item]
+      : [blocks, dragged.block, target.block];
+    if (moving !== anchor) {
+      list.splice(list.indexOf(moving), 1);
+      list.splice(list.indexOf(anchor) + (after ? 1 : 0), 0, moving);
+      paginate();
+    }
+  });
+  pages.addEventListener('dragend', () => {
+    clearIndicator();
+    pages.querySelector('.dragging')?.classList.remove('dragging');
+    dragged = null;
+  });
+
+  // Drag a gap up or down to resize it, in 1/8in steps.
+  pages.addEventListener('pointerdown', (e) => {
+    const gap = e.target.closest('.gap');
+    if (!gap) return;
+    e.preventDefault();
+    gap.setPointerCapture(e.pointerId);
+    gap.classList.add('resizing');
+    const y0 = e.clientY;
+    const start = gap.block.gap;
+    let value = start;
+    const move = (ev) => {
+      value = Math.max(0, Math.round((start + (ev.clientY - y0) / PX_PER_IN) * 8) / 8);
+      gap.style.height = `${value}in`;
+      gap.firstChild.textContent = `${value} in`;
+    };
+    gap.addEventListener('pointermove', move);
+    gap.addEventListener('lostpointercapture', () => {
+      gap.removeEventListener('pointermove', move);
+      gap.block.gap = value;
+      paginate();
+    }, { once: true });
+  });
 
   async function load(file) {
     const status = $('status');
     status.className = '';
     status.textContent = `Reading ${file.name}…`;
     $('print').disabled = true;
-    $('tables').replaceChildren();
     items = [];
+    blocks = [];
+    paginate();
     try {
       const doc = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
       const textItems = [];
@@ -160,7 +257,7 @@
       const { expectedTotal } = parsed;
       rebuild();
       $('print').disabled = items.length === 0;
-      status.textContent = `${items.length} items in ${$('tables').children.length} tables.`;
+      status.textContent = `${items.length} items in ${blocks.length} tables.`;
       if (items.length === 0 || items.length !== expectedTotal) {
         status.className = 'warn';
         status.textContent = `Warning: parsed ${items.length} items but the report says Total Items: ${expectedTotal ?? 'not found'}. Check before printing.`;
@@ -173,7 +270,7 @@
 
   $('file').addEventListener('change', (e) => e.target.files[0] && load(e.target.files[0]));
   $('print').addEventListener('click', () => window.print());
-  $('periodLabel').addEventListener('input', updateCaptions);
+  $('periodLabel').addEventListener('input', paginate);
   for (const button of document.querySelectorAll('button.sort')) {
     button.addEventListener('click', () => {
       sort.dir = sort.key === button.dataset.key && sort.dir === 'asc' ? 'desc' : 'asc';
@@ -183,8 +280,12 @@
   }
   $('splitDiscount').addEventListener('change', rebuild);
   $('splitDonate').addEventListener('change', rebuild);
-  $('fontSize').addEventListener('input', (e) => document.documentElement.style.setProperty('--table-font', `${e.target.value}pt`));
-  $('resetOrder').addEventListener('click', () => $('tables').append(...[...$('tables').children].sort((a, b) => compareGroups(a.group, b.group))));
+  $('keepTogether').addEventListener('change', paginate);
+  $('fontSize').addEventListener('input', (e) => {
+    document.documentElement.style.setProperty('--table-font', `${e.target.value}pt`);
+    paginate();
+  });
+  $('resetOrder').addEventListener('click', () => { blocks.sort((a, b) => compareGroups(a.group, b.group)); paginate(); });
   sortRows(); // label the sort buttons
   const drop = $('drop');
   drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
