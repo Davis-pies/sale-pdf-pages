@@ -13,7 +13,7 @@
   #drop.over { background: #eef; }
   #status.warn { color: #b00; font-weight: bold; }
   .page { box-sizing: border-box; width: 8.5in; height: 11in; padding: 0.5in; margin: 0 auto 0.25in; background: #fff; box-shadow: 0 2px 8px #0006; }
-  .content { height: 100%; overflow: hidden; }
+  .content { height: 100%; overflow-x: visible; overflow-y: clip; } /* cut off at the page bottom, but let gap labels show in the side margin */
   table { font-size: var(--table-font, 10pt); border-collapse: collapse; width: 100%; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   caption { text-align: left; font-weight: bold; font-size: calc(var(--table-font, 10pt) + 2pt); padding-bottom: 4px; cursor: grab; }
   th, td { border: 1px solid #999; padding: 4px 6px; text-align: left; vertical-align: top; }
@@ -33,7 +33,7 @@
   .gap::before { content: ''; position: absolute; left: 0; right: 0; top: -5px; bottom: -5px; } /* grab area, even at 0in */
   .gap::after { content: ''; position: absolute; left: 0; right: 0; top: 50%; border-top: 2px dashed transparent; }
   .gap:hover::after, .gap.resizing::after { border-color: #06f; }
-  .gap span { display: none; position: absolute; right: 0; bottom: calc(50% + 3px); color: #06f; font-size: 12px; line-height: 1; white-space: nowrap; } /* just above the line */
+  .gap span { display: none; position: absolute; left: calc(100% + 4px); top: 50%; transform: translateY(-50%); color: #06f; font-size: 11px; line-height: 1; white-space: nowrap; } /* in the right page margin, level with the line */
   .gap:hover span, .gap.resizing span { display: block; }
   @media print {
     body { margin: 0; background: #fff; }
