@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Consignor Tables</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 16px; color: #111; background: #fff; }
+  #controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+  #drop { border: 2px dashed #888; padding: 16px; border-radius: 8px; }
+  #drop.over { background: #eef; }
+  #status.warn { color: #b00; font-weight: bold; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 1in; break-inside: avoid; }
+  caption { text-align: left; font-weight: bold; font-size: 16px; padding-bottom: 4px; }
+  th, td { border: 1px solid #999; padding: 4px 6px; text-align: left; vertical-align: top; }
+  th { background: #eee; }
+  @media print {
+    #controls { display: none; }
+    body { margin: 0; }
+    thead { display: table-header-group; }
+    tr { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div id="controls">
+  <label id="drop">Drop a Consignor Inventory Report PDF here, or <input type="file" id="file" accept="application/pdf"></label>
+  <button id="print" disabled>Print</button>
+  <span id="status" role="status"></span>
+</div>
+<main id="tables"></main>
+<script type="module">
+  import * as pdfjs from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.min.mjs';
+  import { parseItems, groupItems } from './lib.mjs';
+  pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.worker.min.mjs';
+
+  const $ = (id) => document.getElementById(id);
+  const COLUMNS = [['id', 'Item ID'], ['description', 'Description'], ['category', 'Category'], ['size', 'Size'], ['price', 'Price'], ['flags', 'Flags']];
+
+  function el(tag, text) { const e = document.createElement(tag); if (text != null) e.textContent = text; return e; }
+
+  function render(groups) {
+    $('tables').replaceChildren(...groups.map((g) => {
+      const table = el('table');
+      table.append(el('caption', `${g.category} — ${g.size}${g.period ? ' (period items)' : ''}`));
+      const head = el('tr');
+      head.append(...COLUMNS.map(([, label]) => el('th', label)));
+      table.append(el('thead'));
+      table.tHead.append(head);
+      const body = el('tbody');
+      for (const item of g.items) {
+        const tr = el('tr');
+        tr.append(...COLUMNS.map(([key]) => el('td', item[key])));
+        body.append(tr);
+      }
+      table.append(body);
+      return table;
+    }));
+  }
+
+  async function load(file) {
+    const status = $('status');
+    status.className = '';
+    status.textContent = `Reading ${file.name}…`;
+    $('print').disabled = true;
+    $('tables').replaceChildren();
+    try {
+      const doc = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+      const textItems = [];
+      for (let p = 1; p <= doc.numPages; p++) {
+        const { items } = await (await doc.getPage(p)).getTextContent();
+        for (const t of items) if (t.str.trim()) textItems.push({ page: p, str: t.str, x: t.transform[4], y: t.transform[5], w: t.width });
+      }
+      const { items, expectedTotal } = parseItems(textItems);
+      const groups = groupItems(items);
+      render(groups);
+      $('print').disabled = items.length === 0;
+      status.textContent = `${items.length} items in ${groups.length} tables.`;
+      if (items.length === 0 || items.length !== expectedTotal) {
+        status.className = 'warn';
+        status.textContent = `Warning: parsed ${items.length} items but the report says Total Items: ${expectedTotal ?? 'not found'}. Check before printing.`;
+      }
+    } catch (err) {
+      status.className = 'warn';
+      status.textContent = `Could not read PDF: ${err.message}`;
+    }
+  }
+
+  $('file').addEventListener('change', (e) => e.target.files[0] && load(e.target.files[0]));
+  $('print').addEventListener('click', () => window.print());
+  const drop = $('drop');
+  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); e.dataTransfer.files[0] && load(e.dataTransfer.files[0]); });
+  window.loadReport = load; // used by the headless smoke check
+</script>
+</body>
+</html>
