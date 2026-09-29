@@ -46,6 +46,11 @@ test('joins cells that wrap across multiple lines', () => {
   assert.equal(byId[10].description, 'Rain Boots.');
 });
 
+test('"Item ID" header on one line is recognized', () => {
+  const oneLine = report.filter((t) => t.str !== 'Item' && t.str !== 'ID').concat(frag(1, 'Item ID', CENTERS.id, 623));
+  assert.deepEqual(parseItems(oneLine).items.map((i) => i.id), [7, 8, 9, 10]);
+});
+
 test('no header or title text leaks into rows', () => {
   const text = JSON.stringify(parseItems(report).items);
   for (const s of ['Description', 'Tag Printed', 'Consignor', 'Total Items', 'Test Sale']) assert.ok(!text.includes(s), s);
@@ -61,6 +66,15 @@ test('row split across a page break is rejoined', () => {
   assert.deepEqual(items.map((i) => i.id).slice(-2), [10, 11]);
   assert.equal(items.at(-2).description, 'Rain Boots. Extra Line');
   assert.equal(items.at(-1).description, 'Solo');
+});
+
+test('row whose first line ends a page and whose ID starts the next is rejoined', () => {
+  // As in the real report: the stranded line comes after row 10's cells, 18pt below its ID.
+  const page1End = frag(1, 'Play Kitchen', CENTERS.description, 492);
+  const page2 = [...header(2), ...row(2, 590, 11, { description: ['Dishes', 'Teapot'] })];
+  const { items } = parseItems([...report, page1End, ...page2]);
+  assert.equal(items.at(-2).description, 'Rain Boots.');
+  assert.equal(items.at(-1).description, 'Play Kitchen Dishes Teapot');
 });
 
 test('continuation on a page with no row IDs is kept', () => {

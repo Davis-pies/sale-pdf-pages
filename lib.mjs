@@ -1,41 +1,38 @@
 const COLS = ['id', 'description', 'category', 'size', 'price', 'flags', 'tag'];
 const HEADERS = ['ID', 'Description', 'Category', 'Size', 'Price', 'Flags', 'Tag Printed?'];
 const center = (t) => t.x + t.w / 2;
-const median = (a) => { const s = [...a].sort((p, q) => p - q); return s[Math.floor(s.length / 2)]; };
 
 export function parseItems(textItems) {
   const total = textItems.map((t) => t.str.match(/^Total Items:\s*(\d+)/)).find(Boolean);
   const pages = Map.groupBy(textItems, (t) => t.page);
   let bounds = null;
-  const parsed = []; // { page, anchor, frags, rows? }
-  for (const [page, items] of [...pages].sort((a, b) => a[0] - b[0])) {
+  const rows = [];
+  for (const [, items] of [...pages].sort((a, b) => a[0] - b[0])) {
     let body = items;
     const desc = items.find((t) => t.str.trim() === 'Description');
     if (desc) {
-      const centers = HEADERS.map((h) => center(items.find((t) => t.str.trim() === h && Math.abs(t.y - desc.y) < 15)));
+      const centers = HEADERS.map((h) => center(items.find((t) => t.str.trim().replace(/^Item /, '') === h && Math.abs(t.y - desc.y) < 15)));
       bounds = centers.slice(1).map((c, i) => (centers[i] + c) / 2);
       body = items.filter((t) => t.y < desc.y - 10); // ponytail: 10pt clears the two-line "Item/ID" header cell
     }
     if (!bounds) continue;
-    const col = (t) => COLS[bounds.filter((b) => center(t) > b).length];
-    const anchors = body.filter((t) => col(t) === 'id' && /^\d+$/.test(t.str.trim())).sort((a, b) => b.y - a.y);
-    parsed.push({ anchors, frags: body.filter((t) => !anchors.includes(t)), col });
-  }
-  const gaps = parsed.flatMap((p) => p.anchors.slice(1).map((a, i) => p.anchors[i].y - a.y));
-  const maxLead = 0.75 * (gaps.length ? median(gaps) : 24);
-
-  const rows = [];
-  for (const { anchors, frags, col } of parsed) {
-    const prev = rows.at(-1);
-    const pageRows = anchors.map((a) => ({ id: Number(a.str.trim()), y: a.y, cells: {} }));
-    for (const f of frags) {
-      let row;
-      if (!pageRows.length || f.y > pageRows[0].y + maxLead) row = prev; // continuation of a row split across pages
-      else row = pageRows.reduce((best, r) => (Math.abs(r.y - f.y) < Math.abs(best.y - f.y) ? r : best), pageRows[0]);
-      if (!row) continue;
-      (row.cells[col(f)] ??= []).push(f);
+    // The PDF emits text row by row, each row as ID then cells left to right, so rows are read in
+    // stream order: text before a page's first ID continues the previous page's row, and text in a
+    // column left of the last one seen starts a row whose ID is on the next page.
+    let last = -1;
+    for (const f of body) {
+      const c = bounds.filter((b) => center(f) > b).length;
+      if (c === 0 && /^\d+$/.test(f.str.trim())) {
+        const id = Number(f.str.trim());
+        if (rows.at(-1)?.id === null) rows.at(-1).id = id;
+        else rows.push({ id, cells: {} });
+      } else {
+        if (c < last) rows.push({ id: null, cells: {} });
+        if (!rows.length) continue;
+        (rows.at(-1).cells[COLS[c]] ??= []).push(f);
+      }
+      last = c;
     }
-    rows.push(...pageRows);
   }
   const items = rows.map(({ id, cells }) => {
     const text = (c, sep) => (cells[c] ?? []).sort((a, b) => a.page - b.page || b.y - a.y || a.x - b.x).map((t) => t.str.replace(/\s+/g, ' ').trim()).join(sep).trim();
