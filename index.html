@@ -69,7 +69,8 @@
   pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.worker.min.mjs';
 
   const $ = (id) => document.getElementById(id);
-  const COLUMNS = [['id', 'Item ID', 8], ['description', 'Description', 36], ['category', 'Category', 17], ['size', 'Size', 15], ['price', 'Price', 9], ['flags', 'Flags', 15]]; // width in %
+  // Widths in %, fitted to a real report at 10pt: ID, Price and Flags stay on one line; Description takes the rest.
+  const COLUMNS = [['id', 'ID', 4.5], ['description', 'Description', 37], ['category', 'Category', 15], ['size', 'Size', 12.5], ['price', 'Price', 7], ['flags', 'Flags', 24]];
   const PX_PER_IN = 96;
 
   function el(tag, text) { const e = document.createElement(tag); if (text != null) e.textContent = text; return e; }
