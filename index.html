@@ -88,9 +88,11 @@
   function makeTable(block, start, cont) {
     const table = el('table');
     table.block = block;
-    const caption = el('caption', title(block.group) + (cont ? ' (cont.)' : ''));
-    caption.draggable = true;
-    table.append(caption);
+    if (!cont || !$('oneTable').checked) { // one table needs no title on each page
+      const caption = el('caption', title(block.group) + (cont ? ' (cont.)' : ''));
+      caption.draggable = true;
+      table.append(caption);
+    }
     const head = el('tr');
     head.append(...COLUMNS.map(([, label, width]) => Object.assign(el('th', label), { style: `width: ${width}%` })));
     table.createTHead().append(head);
