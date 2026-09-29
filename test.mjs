@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseItems, groupItems, sortItems, SIZE_ORDER } from './lib.mjs';
+import { parseItems, groupItems, sortItems, SIZE_ORDER, parseExport } from './lib.mjs';
 
 // Synthetic report text laid out like a real Consignor Inventory Report: every cell is
 // centered on its column, and wrapped lines sit 11.2pt apart around the row's center.
@@ -141,4 +141,28 @@ test('groupItems optionally splits on Discount and Donate flags', () => {
   assert.deepEqual(summary(groupItems(items, { discount: true, donate: true })), [
     [['Discount', 'Donate'], [3]], [['Discount', 'No Donate'], [2]], [['No Discount', 'Donate'], [1]], [['No Discount', 'No Donate'], [4]],
   ]);
+});
+
+test('reads a printed export back into titled tables in print order', () => {
+  const t = (page, str, x, y, h = 10) => ({ page, str, x, y, w: str.length * 5, h });
+  const exported = [
+    t(1, 'Toys —', 36, 740, 12), t(1, 'Infant', 72, 740, 12), t(1, 'ID', 41, 720), t(1, 'Description', 72, 720),
+    t(1, '12', 41, 700), t(1, '12', 72, 700), t(1, '3', 41, 680), t(1, '$1.00', 400, 680),
+    t(1, 'Puzzles', 36, 500, 12), t(1, '7', 41, 480),
+    t(2, 'Puzzles (cont.)', 36, 740, 12), t(2, '5', 41, 700), t(2, '41', 41, 680), t(2, '1', 41, 668), // 411 wrapped
+  ];
+  const { fontSize, headers, tables } = parseExport(exported);
+  assert.equal(fontSize, 10);
+  assert.equal(headers, true);
+  assert.deepEqual(tables.map((x) => [x.title, x.ids.map((i) => i.id)]), [['Toys — Infant', [12, 3]], ['Puzzles', [7, 5, 411]]]);
+  assert.equal(parseExport(exported.filter((x) => x.str !== 'Description')).headers, false);
+});
+
+test("a table's last row records its lowest line, for measuring the gap below", () => {
+  const t = (page, str, x, y, h = 10) => ({ page, str, x, y, w: str.length * 5, h });
+  const { tables } = parseExport([
+    t(1, 'Toys', 36, 740, 12), t(1, '3', 41, 700), t(1, 'Two line', 72, 700), t(1, 'description', 72, 688),
+    t(1, 'Books', 36, 650, 12), t(1, 'ID', 41, 630), t(1, '4', 41, 610),
+  ]);
+  assert.deepEqual(tables.map((x) => x.ids.map((i) => i.bottom)), [[688], [610]]);
 });

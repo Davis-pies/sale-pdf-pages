@@ -54,18 +54,21 @@
   <label><input type="checkbox" id="splitDiscount"> Split by Discount</label>
   <label><input type="checkbox" id="splitDonate"> Split by Donate</label>
   <label><input type="checkbox" id="keepTogether" checked> Keep tables together</label>
+  <label><input type="checkbox" id="zebra" checked> Zebra stripes</label>
+  <label><input type="checkbox" id="headers" checked> Column headers</label>
   <label>Font size (pt): <input type="number" id="fontSize" value="10" min="6" max="24" step="1"></label>
   <label>Gap between tables (in): <input type="number" id="gapSize" value="1" min="0" step="0.125"></label>
   <button id="resetOrder">Reset table order</button>
   <button id="resetGaps">Reset gaps</button>
   <button id="resetAll">Reset all</button>
+  <label>Restore layout from a printed PDF: <input type="file" id="layoutFile" accept="application/pdf"></label>
   <button id="print" disabled>Print</button>
   <span id="status" role="status"></span><span id="pageCount"></span>
 </div>
 <main id="pages"></main>
 <script type="module">
   import * as pdfjs from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.min.mjs';
-  import { parseItems, groupItems, sortItems, compareGroups } from './lib.mjs';
+  import { parseItems, groupItems, sortItems, compareGroups, parseExport } from './lib.mjs';
   pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.worker.min.mjs';
 
   const $ = (id) => document.getElementById(id);
@@ -93,17 +96,21 @@
       caption.draggable = true;
       table.append(caption);
     }
-    const head = el('tr');
-    head.append(...COLUMNS.map(([, label, width]) => Object.assign(el('th', label), { style: `width: ${width}%` })));
-    table.createTHead().append(head);
+    if ($('headers').checked) {
+      const head = el('tr');
+      head.append(...COLUMNS.map(([, label]) => el('th', label)));
+      table.createTHead().append(head);
+    }
     const body = table.createTBody();
     block.rows.slice(start).forEach((item, i) => {
       const tr = el('tr');
       Object.assign(tr, { item, block, draggable: true });
-      if ((start + i) % 2) tr.className = 'alt';
+      if ($('zebra').checked && (start + i) % 2) tr.className = 'alt';
       tr.append(...COLUMNS.map(([key]) => el('td', item[key])));
       body.append(tr);
     });
+    // Fixed layout takes column widths from the first row, header or not.
+    [...table.rows[0].cells].forEach((cell, i) => { cell.style.width = `${COLUMNS[i][2]}%`; });
     return table;
   }
 
@@ -161,11 +168,12 @@
 
   const gapSize = () => Math.max(0, Number($('gapSize').value) || 0);
 
+  const currentGroups = () => $('oneTable').checked
+    ? [{ period: false, category: 'All items', size: '', flags: [], items }]
+    : groupItems(items, { discount: $('splitDiscount').checked, donate: $('splitDonate').checked });
+
   function rebuild() {
-    const groups = $('oneTable').checked
-      ? [{ period: false, category: 'All items', size: '', flags: [], items }]
-      : groupItems(items, { discount: $('splitDiscount').checked, donate: $('splitDonate').checked });
-    blocks = groups.map((group) => ({ group, rows: sortItems(group.items, sort.key, sort.dir), gap: gapSize() }));
+    blocks = currentGroups().map((group) => ({ group, rows: sortItems(group.items, sort.key, sort.dir), gap: gapSize() }));
     paginate();
   }
 
@@ -251,6 +259,110 @@
     }, { once: true });
   });
 
+  async function readText(file) {
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+    const textItems = [];
+    for (let p = 1; p <= doc.numPages; p++) {
+      const page = await (await doc.getPage(p)).getTextContent();
+      for (const t of page.items) if (t.str.trim()) textItems.push({ page: p, str: t.str, x: t.transform[4], y: t.transform[5], w: t.width, h: t.height });
+    }
+    return textItems;
+  }
+
+  const key = (title) => title.replace(/\s+/g, '');
+  const eighths = (inches) => Math.max(0, Math.round(inches * 8) / 8);
+  // Where the last line's text baseline sits: an empty inline-block's bottom edge rests on it.
+  const baseline = (node) => { const probe = el('span'); probe.style.display = 'inline-block'; node.append(probe); const y = probe.getBoundingClientRect().bottom; probe.remove(); return y; };
+
+  // Puts back the settings, table order, row order and gaps of a PDF printed from this page, for the report already loaded.
+  async function restore(file) {
+    const status = $('status');
+    status.className = 'warn';
+    if (!items.length) { status.textContent = 'Load the report first, then restore its layout.'; return; }
+    try {
+      const { fontSize, headers, tables } = parseExport(await readText(file));
+      const printed = new Set(tables.map((t) => key(t.title)));
+      // Find the grouping and period label whose table titles are the printed ones.
+      const before = [$('oneTable').checked, $('splitDiscount').checked, $('splitDonate').checked, $('periodLabel').value];
+      const matched = [[false, false, false], [false, true, false], [false, false, true], [false, true, true], [true, false, false]].some(([one, discount, donate]) => {
+        [$('oneTable').checked, $('splitDiscount').checked, $('splitDonate').checked] = [one, discount, donate];
+        const groups = currentGroups();
+        const period = groups.find((g) => g.period);
+        const base = period && title({ ...period, period: false }) + ' — ';
+        const labels = ['', ...(period ? tables.filter((t) => t.title.startsWith(base)).map((t) => t.title.slice(base.length)) : [])];
+        return labels.some((label) => {
+          $('periodLabel').value = label;
+          const titles = new Set(groups.map((g) => key(title(g))));
+          return [...printed].every((t) => titles.has(t));
+        });
+      });
+      if (!tables.length || !matched) {
+        [$('oneTable').checked, $('splitDiscount').checked, $('splitDonate').checked, $('periodLabel').value] = before;
+        status.textContent = `${file.name} doesn't look like a printout of this report's tables; nothing was changed.`;
+        return;
+      }
+      $('fontSize').value = fontSize;
+      setFont();
+      $('headers').checked = headers;
+      rebuild();
+      const byTitle = new Map(blocks.map((b) => [key(title(b.group)), b]));
+      const restored = tables.map((t) => byTitle.get(key(t.title)));
+      blocks = [...restored, ...blocks.filter((b) => !restored.includes(b))]; // tables new since the printout go last
+      tables.forEach((t, i) => {
+        const order = t.ids.map((r) => r.id);
+        const rank = (item) => { const n = order.indexOf(item.id); return n < 0 ? order.length : n; };
+        restored[i].rows.sort((a, b) => rank(a) - rank(b));
+      });
+      paginate();
+      // A gap shows in the printout as the distance from a table's lowest line to the next title on the same page.
+      // Measuring from the lowest line, not the row top, keeps a row that wraps on screen but not in print from skewing it.
+      const measured = [];
+      tables.forEach((t, i) => {
+        const next = tables[i + 1];
+        const last = t.ids.at(-1);
+        if (!next || !last || last.page !== next.page) return;
+        const row = [...pages.querySelectorAll('tbody tr')].find((r) => r.item.id === last.id);
+        const gap = [...pages.querySelectorAll('.gap')].find((g) => g.block === restored[i]);
+        const caption = [...pages.querySelectorAll('table')].find((tb) => tb.block === restored[i + 1])?.caption;
+        if (!row || !gap || !caption) return;
+        const between = (last.bottom - next.y) * PX_PER_IN / 72 - (gap.getBoundingClientRect().top - Math.max(...[...row.cells].map(baseline))) - (baseline(caption) - caption.getBoundingClientRect().top);
+        measured.push([restored[i], eighths(between / PX_PER_IN)]);
+      });
+      // Gaps that ended a page don't show; they get the most common gap.
+      const counts = Map.groupBy(measured, ([, g]) => g);
+      const common = [...counts].sort((a, b) => b[1].length - a[1].length)[0]?.[0];
+      if (common != null) $('gapSize').value = common;
+      for (const block of blocks) block.gap = gapSize();
+      for (const [block, g] of measured) block.gap = g;
+      // Keep tables together isn't in the printout: use whichever setting starts the most tables on their printed page.
+      const onPrintedPage = () => tables.filter((t, i) => {
+        const table = [...pages.querySelectorAll('table')].find((tb) => tb.block === restored[i]);
+        return [...pages.children].indexOf(table.closest('.page')) + 1 === t.page;
+      }).length;
+      $('keepTogether').checked = true;
+      paginate();
+      const together = onPrintedPage();
+      $('keepTogether').checked = false;
+      paginate();
+      if (onPrintedPage() < together) { $('keepTogether').checked = true; paginate(); }
+      // A table that started a new page in the printout still does: its gap above grows to the page bottom.
+      tables.forEach((t, i) => {
+        const prev = tables[i - 1]?.ids.at(-1);
+        if (!prev || prev.page === t.page) return;
+        const gap = [...pages.querySelectorAll('.gap')].find((g) => g.block === restored[i - 1]);
+        const table = [...pages.querySelectorAll('table')].find((tb) => tb.block === restored[i]);
+        if (gap.closest('.page') !== table.closest('.page')) return;
+        const bottom = gap.closest('.content').getBoundingClientRect().bottom;
+        restored[i - 1].gap = Math.ceil((bottom - gap.getBoundingClientRect().top) / PX_PER_IN * 8) / 8;
+        paginate();
+      });
+      status.className = '';
+      status.textContent = `Restored the layout of ${tables.length} tables from ${file.name}.`;
+    } catch (err) {
+      status.textContent = `Could not read PDF: ${err.message}`;
+    }
+  }
+
   async function load(file) {
     const status = $('status');
     status.className = '';
@@ -260,13 +372,7 @@
     blocks = [];
     paginate();
     try {
-      const doc = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
-      const textItems = [];
-      for (let p = 1; p <= doc.numPages; p++) {
-        const page = await (await doc.getPage(p)).getTextContent();
-        for (const t of page.items) if (t.str.trim()) textItems.push({ page: p, str: t.str, x: t.transform[4], y: t.transform[5], w: t.width });
-      }
-      const parsed = parseItems(textItems);
+      const parsed = parseItems(await readText(file));
       items = parsed.items;
       const { expectedTotal } = parsed;
       rebuild();
@@ -296,10 +402,11 @@
   $('splitDiscount').addEventListener('change', rebuild);
   $('splitDonate').addEventListener('change', rebuild);
   $('keepTogether').addEventListener('change', paginate);
-  $('fontSize').addEventListener('input', (e) => {
-    document.documentElement.style.setProperty('--table-font', `${e.target.value}pt`);
-    paginate();
-  });
+  const setFont = () => document.documentElement.style.setProperty('--table-font', `${$('fontSize').value}pt`);
+  $('fontSize').addEventListener('input', () => { setFont(); paginate(); });
+  $('zebra').addEventListener('change', paginate);
+  $('headers').addEventListener('change', paginate);
+  $('layoutFile').addEventListener('change', (e) => e.target.files[0] && restore(e.target.files[0]));
   $('resetOrder').addEventListener('click', () => { blocks.sort((a, b) => compareGroups(a.group, b.group)); paginate(); });
   const resetGaps = () => { for (const block of blocks) block.gap = gapSize(); paginate(); };
   $('gapSize').addEventListener('input', resetGaps); // sets every gap, including ones dragged by hand

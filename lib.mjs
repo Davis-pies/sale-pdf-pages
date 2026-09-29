@@ -71,3 +71,46 @@ const price = (item) => Number(item.price.replace(/[^\d.]/g, ''));
 // key: 'id' | 'price'; dir: 'asc' | 'desc'; id breaks ties in the same direction. Returns a new array.
 export const sortItems = (items, key, dir = 'asc') =>
   [...items].sort((a, b) => ((key === 'price' ? price(a) - price(b) : 0) || a.id - b.id) * (dir === 'desc' ? -1 : 1));
+
+// Reads a PDF printed from this page back into its tables, in print order: [{ title, ids: [{ id, page, y, bottom }], page, y }].
+// Titles are the text 2pt larger than the rows; a "(cont.)" title, or none (One table), continues the table above.
+export function parseExport(textItems) {
+  const count = new Map();
+  for (const t of textItems) count.set(Math.round(t.h), (count.get(Math.round(t.h)) ?? 0) + 1);
+  const fontSize = [...count].sort((a, b) => b[1] - a[1])[0]?.[0];
+  const size = (t) => Math.round(t.h) - fontSize;
+  const captions = Map.groupBy(textItems.filter((t) => size(t) === 2), (t) => `${t.page} ${Math.round(t.y)}`);
+  const entries = [...captions.values()].map((line) => {
+    line.sort((a, b) => a.x - b.x);
+    const text = line.map((t, i) => (i && t.x > line[i - 1].x + line[i - 1].w + 1 ? ' ' : '') + t.str).join('');
+    return { page: line[0].page, y: line[0].y, title: text.replace(/\s+/g, ' ').trim().replace(/ \(cont\.\)$/, '') };
+  });
+  // ponytail: 60pt = 0.5in margin + the 4.5% ID column of 7.5in; move it if the ID column is widened
+  const byPosition = (a, b) => a.page - b.page || b.y - a.y;
+  let id = null;
+  for (const t of textItems.filter((t) => size(t) === 0 && t.x < 60 && /^\d+$/.test(t.str.trim())).sort(byPosition)) {
+    // An ID too wide for its column (at larger fonts) wraps onto the next line; rows are further apart than lines.
+    if (id?.page === t.page && id.end - t.y < 1.25 * fontSize + 3) id.id = Number(`${id.id}${t.str.trim()}`);
+    else entries.push(id = { page: t.page, y: t.y, id: Number(t.str.trim()) });
+    id.end = t.y;
+  }
+  entries.sort(byPosition);
+  // A row's lowest line of text, down to the next row or title: what the gap under a table is measured from.
+  const body = textItems.filter((t) => size(t) === 0);
+  entries.forEach((e, i) => {
+    if (e.id == null) return;
+    const next = entries[i + 1]?.page === e.page ? entries[i + 1].y : -Infinity;
+    e.bottom = Math.min(...body.filter((t) => t.page === e.page && t.y <= e.y && t.y > next).map((t) => t.y));
+  });
+  const tables = [];
+  let table = null;
+  for (const e of entries) {
+    if (e.title == null) table?.ids.push(e);
+    else if (e.title !== table?.title) {
+      table = tables.find((t) => t.title === e.title);
+      if (!table) tables.push(table = { title: e.title, page: e.page, y: e.y, ids: [] });
+    }
+  }
+  const headers = textItems.some((t) => size(t) === 0 && t.str.trim() === 'Description');
+  return { fontSize, headers, tables };
+}
