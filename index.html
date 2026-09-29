@@ -14,9 +14,10 @@
   #status.warn { color: #b00; font-weight: bold; }
   .page { box-sizing: border-box; width: 8.5in; height: 11in; padding: 0.5in; margin: 0 auto 0.25in; background: #fff; box-shadow: 0 2px 8px #0006; }
   .content { height: 100%; overflow-x: visible; overflow-y: clip; } /* cut off at the page bottom, but let gap labels show in the side margin */
-  table { font-size: var(--table-font, 10pt); border-collapse: collapse; width: 100%; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  /* Fixed layout: a row's height can't change when other rows join or leave its table, so pagination measures true. */
+  table { table-layout: fixed; font-size: var(--table-font, 10pt); border-collapse: collapse; width: 100%; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   caption { text-align: left; font-weight: bold; font-size: calc(var(--table-font, 10pt) + 2pt); padding-bottom: 4px; cursor: grab; }
-  th, td { border: 1px solid #999; padding: 4px 6px; text-align: left; vertical-align: top; }
+  th, td { border: 1px solid #999; padding: 4px 6px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
   th { background: #ddd; }
   tbody tr.alt td { background: #f2f2f2; }
   tbody tr { cursor: grab; }
@@ -49,6 +50,7 @@
   <label id="drop">Drop a Consignor Inventory Report PDF here, or <input type="file" id="file" accept="application/pdf"></label>
   <label>Period (.) items belong to: <input id="periodLabel" placeholder="e.g. Grandma"></label>
   <span>Sort rows: <button class="sort" data-key="id">Item ID</button> <button class="sort" data-key="price">Price</button></span>
+  <label><input type="checkbox" id="oneTable"> One table</label>
   <label><input type="checkbox" id="splitDiscount"> Split by Discount</label>
   <label><input type="checkbox" id="splitDonate"> Split by Donate</label>
   <label><input type="checkbox" id="keepTogether" checked> Keep tables together</label>
@@ -66,7 +68,7 @@
   pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.worker.min.mjs';
 
   const $ = (id) => document.getElementById(id);
-  const COLUMNS = [['id', 'Item ID'], ['description', 'Description'], ['category', 'Category'], ['size', 'Size'], ['price', 'Price'], ['flags', 'Flags']];
+  const COLUMNS = [['id', 'Item ID', 8], ['description', 'Description', 36], ['category', 'Category', 17], ['size', 'Size', 15], ['price', 'Price', 9], ['flags', 'Flags', 15]]; // width in %
   const PX_PER_IN = 96;
 
   function el(tag, text) { const e = document.createElement(tag); if (text != null) e.textContent = text; return e; }
@@ -78,7 +80,7 @@
 
   function title({ category, size, flags, period }) {
     const label = $('periodLabel').value.trim();
-    return [category, size, ...flags].join(' — ') + (period ? (label ? ` — ${label}` : ' (period items)') : '');
+    return [category, size, ...flags].filter(Boolean).join(' — ') + (period ? (label ? ` — ${label}` : ' (period items)') : '');
   }
 
   function makeTable(block, start, cont) {
@@ -88,7 +90,7 @@
     caption.draggable = true;
     table.append(caption);
     const head = el('tr');
-    head.append(...COLUMNS.map(([, label]) => el('th', label)));
+    head.append(...COLUMNS.map(([, label, width]) => Object.assign(el('th', label), { style: `width: ${width}%` })));
     table.createTHead().append(head);
     const body = table.createTBody();
     block.rows.slice(start).forEach((item, i) => {
@@ -103,6 +105,7 @@
 
   function paginate() {
     const pages = $('pages');
+    pages.style.minHeight = `${pages.offsetHeight}px`; // Firefox scrolls to the top if the page is briefly emptied
     pages.replaceChildren();
     let content;
     const newPage = () => {
@@ -148,11 +151,14 @@
       gap.append(el('span', `${block.gap} in`));
       content.append(gap);
     }
+    pages.style.minHeight = '';
     $('pageCount').textContent = blocks.length ? ` ${pages.children.length} page(s).` : '';
   }
 
   function rebuild() {
-    const groups = groupItems(items, { discount: $('splitDiscount').checked, donate: $('splitDonate').checked });
+    const groups = $('oneTable').checked
+      ? [{ period: false, category: 'All items', size: '', flags: [], items }]
+      : groupItems(items, { discount: $('splitDiscount').checked, donate: $('splitDonate').checked });
     blocks = groups.map((group) => ({ group, rows: sortItems(group.items, sort.key, sort.dir), gap: 1 }));
     paginate();
   }
@@ -280,6 +286,7 @@
       sortRows();
     });
   }
+  $('oneTable').addEventListener('change', rebuild);
   $('splitDiscount').addEventListener('change', rebuild);
   $('splitDonate').addEventListener('change', rebuild);
   $('keepTogether').addEventListener('change', paginate);
